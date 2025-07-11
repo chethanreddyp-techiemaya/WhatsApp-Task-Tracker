@@ -73,6 +73,7 @@ func addTaskToAirtable(task, deadline, assignTo, attachment, description string)
 
 func main() {
 	startTime := time.Now()
+
 	container, err := sqlstore.New(context.Background(), "sqlite", "file:session.db?cache=shared&_pragma=foreign_keys=on", waLog.Noop)
 	if err != nil {
 		panic(err)
@@ -83,12 +84,19 @@ func main() {
 	}
 	client := whatsmeow.NewClient(deviceStore, waLog.Noop)
 
-	fmt.Println("Your JID:", client.Store.ID.String())
+	// Safe way to print JID
+	if client.Store.ID != nil {
+		fmt.Println("Your JID:", client.Store.ID.String())
+	} else {
+		fmt.Println("No existing session found. Need to scan QR code.")
+	}
 
 	if client.Store.ID == nil {
+		// No existing session, need to scan QR code
 		qrChan, _ := client.GetQRChannel(context.Background())
 		err := client.Connect()
 		if err != nil {
+			fmt.Println("Failed to connect:", err)
 			panic(err)
 		}
 		for evt := range qrChan {
@@ -97,15 +105,34 @@ func main() {
 				qr := qrterminal.New()
 				qr.Get(evt.Code).Print()
 			} else if evt.Event == "success" {
-				fmt.Println("Logged in.")
+				fmt.Println("Logged in successfully!")
 				break
+			} else if evt.Event == "timeout" {
+				fmt.Println("QR code timeout. Please restart the application.")
+				client.Disconnect()
+				return
 			}
 		}
 	} else {
+		// Existing session found, try to connect
 		err := client.Connect()
 		if err != nil {
-			panic(err)
+			fmt.Println("Failed to connect with existing session. Backing up and removing session, please restart to scan QR code again...")
+			client.Disconnect()
+			// Only back up and remove session.db if connection fails
+			if _, statErr := os.Stat("session.db"); statErr == nil {
+				backupName := fmt.Sprintf("session.db.backup.%d", time.Now().Unix())
+				err := os.Rename("session.db", backupName)
+				if err != nil {
+					fmt.Println("Failed to back up session.db:", err)
+				} else {
+					fmt.Println("Backed up session.db to", backupName)
+				}
+			}
+			fmt.Println("Please restart the application to scan QR code again.")
+			return
 		}
+		fmt.Println("Connected with existing session.")
 	}
 
 	fmt.Println("WhatsApp Task Tracker is running...")
